@@ -127,10 +127,11 @@ void FLocalSimulation::RemoveActor(FActorHandle* Handle)
 		}
 
 		// store temp before removal from array container
-		auto temp = ActorHandles[Handle->ActorDataIndex];
+		auto temp = ActorHandles[index];
 
 		// remove from handles (only removes it from array)
 		ActorHandles.Remove(Handle);
+		Actors.RemoveAt(index);
 		RigidBodiesData.RemoveAt(index);
 		SolverBodiesData.RemoveAt(index);
 		PendingAcceleration.RemoveAt(index);
@@ -142,12 +143,12 @@ void FLocalSimulation::RemoveActor(FActorHandle* Handle)
 				// do nothing
 				break;
 			case 1:
-				// remove from simulated bodies to maintain accurate count
-				--NumSimulatedBodies;
-				break;
-			case 2:
 				// remove from kinematic bodies to maintain accurate count
 				--NumKinematicBodies;
+				break;
+			case 2:
+				// remove from simulated bodies to maintain accurate count
+				--NumSimulatedBodies;
 				break;
 		}
 

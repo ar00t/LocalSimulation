@@ -68,12 +68,14 @@ protected:
 
 private:
 	void DeferredRemoval();
+	void DeferredAddition();
 	void UpdatePhysics();
 	void SimulatePhysics(float DeltaTime);
 
 	void RemoveJoints();
 	void RemoveMeshData();
 
+	void AddMeshData();
 	void UpdateMeshVisuals();
 
 	// Use to simulate along with PhysScene
@@ -98,9 +100,10 @@ private:
 	LocalPhysics::FLocalSimulation* LocalSimulation;
 
 	TArray<LocalPhysics::LocalPhysicData*> MeshDataToRemove;
+	TArray<LocalPhysics::LocalPhysicData*> MeshDataToAdd;
 	TArray<LocalPhysics::LocalPhysicJointData*> JointsToRemove;
 	bool bDeferRemovalOfBodies = false;
-
+	bool bDeferAdditionOfBodies = false;
 public:
 	// Check whether this mesh is associated with this space.
 	UFUNCTION(BlueprintCallable, Category = "Local Simulation")

@@ -114,6 +114,15 @@ void ALocalSimulationVolume::DeferredRemoval()
 	//todo: bDeferAdditionOfBodies
 }
 
+void ALocalSimulationVolume::DeferredAddition()
+{
+	if (bDeferAdditionOfBodies)
+	{
+		AddMeshData();
+		bDeferAdditionOfBodies = false;
+	}
+}
+
 void ALocalSimulationVolume::UpdatePhysics()
 {
 	/*
@@ -211,6 +220,118 @@ void ALocalSimulationVolume::RemoveMeshData()
 	MeshDataToRemove.Empty();
 }
 
+void ALocalSimulationVolume::AddMeshData() {
+	/*
+	* messy check for static, kinematic, dynamic
+	*/
+	FPhysScene* PhysScene = GetWorld()->GetPhysicsScene();
+	if (!PhysScene)
+	{
+		return;
+	}
+
+	// Scene Lock for Multi-Threading
+	PxScene* SyncScene = PhysScene->GetPhysXScene(PST_Sync);
+	SCOPED_SCENE_WRITE_LOCK(SyncScene); //SCOPED_SCENE_WRITE_LOCK or SCOPED_SCENE_READ_LOCK if you only need to read
+
+	for (LocalPhysicData* MeshData : MeshDataToAdd)
+	{
+		UStaticMeshComponent* Mesh = MeshData->InVisualMesh;
+											// default is Dynamic, other checks will override this default if they're true.
+		ELocalPhysicsBodyType typeOfAdd = ELocalPhysicsBodyType::Dynamic;
+		// check if Kinematic by Component Mobility == Movable && Physics active
+		typeOfAdd = Mesh->Mobility.GetValue() == EComponentMobility::Movable && (!Mesh->IsSimulatingPhysics() || !Mesh->BodyInstance.bSimulatePhysics) ? ELocalPhysicsBodyType::Kinematic : typeOfAdd;
+		// check if Static by Component Mobility == Static
+		typeOfAdd = Mesh->Mobility.GetValue() == EComponentMobility::Static ? ELocalPhysicsBodyType::Static : typeOfAdd;
+
+		// create reference to body instance of mesh being added
+		FBodyInstance& BodyInstance = Mesh->BodyInstance;
+
+		// create copy of new relative transform
+		const FTransform BodyTransform = Mesh->BodyInstance.GetUnrealWorldTransform_AssumesLocked().GetRelativeTransform(LocalSpace->ComponentToWorld);
+
+		UStaticMeshComponent* DynamicMesh;
+		if (MeshData->InPhysicsMesh != nullptr)
+		{
+			// by default, we create clones for kinematic components.
+			DynamicMesh = MeshData->InPhysicsMesh;
+			DynamicMesh->SetMobility(EComponentMobility::Movable);
+			DynamicMesh->RegisterComponentWithWorld(GetWorld());
+			DynamicMesh->SetHiddenInGame(true);
+			DynamicMesh->SetMobility(EComponentMobility::Movable);
+			DynamicMesh->SetStaticMesh(Mesh->GetStaticMesh());
+		}
+		else
+		{
+			DynamicMesh = Mesh;
+		}
+
+		/* always set Visual Mesh movable because this (LocalSimulationVolume)
+		* actor will move, so even meshes with 'static' mobility will move.
+		*/
+		Mesh->SetMobility(EComponentMobility::Movable);
+
+		switch (typeOfAdd)
+		{
+		case ELocalPhysicsBodyType::Kinematic:
+		{
+			auto kinematicBody = BodyInstance.GetPxRigidBody_AssumesLocked();
+			if (!kinematicBody)
+				return;
+			// we are going to listen for transform updates from SetComponentTransform (from the original owner)
+			// I want to say this is still necessary for any updates we get in-between this Actors tick cycle.
+			Mesh->TransformUpdated.AddUObject(this, &ALocalSimulationVolume::TransformUpdated);
+			KinematicBodies++;
+			MeshData->InHandle = LocalSimulation->CreateKinematicActor(kinematicBody, BodyTransform);
+		}
+		break;
+		case ELocalPhysicsBodyType::Static:
+		{
+			auto staticBody = BodyInstance.GetPxRigidBody_AssumesLocked();
+			if (!staticBody)
+				return;
+			// add new mesh into simulation 'local' space
+			StaticBodies++;
+			MeshData->InHandle = LocalSimulation->CreateKinematicActor(staticBody, BodyTransform);
+		}
+		break;
+		case ELocalPhysicsBodyType::Dynamic:
+		{
+			auto dynamicBody = BodyInstance.GetPxRigidDynamic_AssumesLocked();
+			if (!dynamicBody)
+				return;
+			DynamicBodies++;
+			// preserve linear / angular velocity for 'local' simulating mesh
+			FVector LinearVelocity = Mesh->GetPhysicsLinearVelocity();
+			FVector AngularVelocity = Mesh->GetPhysicsAngularVelocity();
+			// restore linear / angular velocity to 'local' handle of simulating mesh (newHandle), and convert it from 'world' to 'local' space base on this actor transform.
+			// by default, we create clones for kinematic components.
+
+			// add new mesh into simulation 'local' space
+			DynamicMesh->SetSimulatePhysics(false);
+
+			// create dynamic rigidbody, which is expected to simulate.
+			MeshData->InHandle = LocalSimulation->CreateDynamicActor(dynamicBody, BodyTransform);
+
+			if (bConvertVelocity)
+			{
+				MeshData->InHandle->SetLinearVelocity(LocalRotation.RotateVector(LocalSpace->ComponentToWorld.GetRotation().UnrotateVector(LinearVelocity)));
+				MeshData->InHandle->SetAngularVelocity(LocalRotation.RotateVector(LocalSpace->ComponentToWorld.GetRotation().UnrotateVector(AngularVelocity)));
+			}
+		}
+		break;
+		}
+
+		// remove original body from world-space
+		if (MeshData->InPhysicsMesh == nullptr)
+			BodyInstance.TermBody();
+
+		SimulatedActors.Add(MeshData);
+
+	}
+	MeshDataToAdd.Empty();
+}
+
 void ALocalSimulationVolume::UpdateMeshVisuals()
 {
 	// dynamic/static pass, kinematic is TransformedUpdated below
@@ -252,16 +373,17 @@ void ALocalSimulationVolume::Update(FPhysScene* PhysScene, uint32 SceneType, flo
 	// can't simulate without this
 	if (!LocalSimulation)
 		return;
+
+	DeferredAddition();
 	// don't simulate if we don't have an Actor Handle
-	if (!LocalSimulation->HandleAvailableToSimulate())
+	if (!LocalSimulation->HandleAvailableToSimulate()) {
 		return;
-	
+	}
 	// process simulation data 
 	SimulatePhysics(DeltaTime);
-
 	// do any early tick removals
 	DeferredRemoval();
-	
+
 	// updates visual geoemtry to match rigidbodies
 	UpdatePhysics();
 }
@@ -360,128 +482,26 @@ FConstraintInstance ALocalSimulationVolume::GetConstraintProfile(int Index) cons
 // todo: fall-back setup / error logs when Mesh already exist, etc edge cases
 bool ALocalSimulationVolume::AddStaticMeshToSimulation(UStaticMeshComponent* Mesh, bool ShouldExistInBothScenes)
 {
-	bool haveWeAddedMesh = false;
-	// if we don't find this mesh in Simulated or Kinematic arrays
-	if (!IsInSimulation(Mesh))
-	{
-		/*
-		 * messy check for static, kinematic, dynamic
-		 */
-		FPhysScene* PhysScene = GetWorld()->GetPhysicsScene();
-		if (!PhysScene)
-		{
+		if (IsInSimulation(Mesh)) {
 			return false;
 		}
 
-		// Scene Lock for Multi-Threading
-		PxScene* SyncScene = PhysScene->GetPhysXScene(PST_Sync);
-		SCOPED_SCENE_WRITE_LOCK(SyncScene); //SCOPED_SCENE_WRITE_LOCK or SCOPED_SCENE_READ_LOCK if you only need to read
-
-		 // default is Dynamic, other checks will override this default if they're true.
+		// default is Dynamic, other checks will override this default if they're true.
 		ELocalPhysicsBodyType typeOfAdd = ELocalPhysicsBodyType::Dynamic;
-		// check if Kinematic by Component Mobility == Movable && Physics active
-		typeOfAdd = Mesh->Mobility.GetValue() == EComponentMobility::Movable && (!Mesh->IsSimulatingPhysics() || !Mesh->BodyInstance.bSimulatePhysics) ? ELocalPhysicsBodyType::Kinematic : typeOfAdd;
-		// check if Static by Component Mobility == Static
-		typeOfAdd = Mesh->Mobility.GetValue() == EComponentMobility::Static ? ELocalPhysicsBodyType::Static : typeOfAdd;
-
-		// init SimulatedActors data
-		LocalPhysicData* NewMeshData = new LocalPhysicData(*LocalSimulation, Mesh, ShouldExistInBothScenes ? NewObject<UStaticMeshComponent>(this) : nullptr, nullptr, typeOfAdd);
-
-		// create reference to body instance of mesh being added
-		FBodyInstance& BodyInstance = Mesh->BodyInstance;
-
-		// create copy of new relative transform
-		const FTransform BodyTransform = Mesh->BodyInstance.GetUnrealWorldTransform_AssumesLocked().GetRelativeTransform(LocalSpace->ComponentToWorld);
-
-		UStaticMeshComponent* DynamicMesh = NewMeshData->InPhysicsMesh;
-		if(ShouldExistInBothScenes)
-		{
-			// by default, we create clones for kinematic components.
-			DynamicMesh = NewMeshData->InPhysicsMesh;
-			DynamicMesh->SetMobility(EComponentMobility::Movable);
-			DynamicMesh->RegisterComponentWithWorld(GetWorld());
-			DynamicMesh->SetHiddenInGame(true);
-			DynamicMesh->SetMobility(EComponentMobility::Movable);
-			DynamicMesh->SetStaticMesh(Mesh->GetStaticMesh());
-		}
-		else
-		{
-			DynamicMesh = NewMeshData->InVisualMesh;
-		}
-
-		/* always set Visual Mesh movable because this (LocalSimulationVolume)
-		 * actor will move, so even meshes with 'static' mobility will move.
-		 */
-		Mesh->SetMobility(EComponentMobility::Movable);
-
-		switch (typeOfAdd)
-		{
-			case ELocalPhysicsBodyType::Kinematic:
-				{
-					auto kinematicBody = BodyInstance.GetPxRigidBody_AssumesLocked();
-					if (!kinematicBody)
-						return false;
-					// we are going to listen for transform updates from SetComponentTransform (from the original owner)
-					// I want to say this is still necessary for any updates we get in-between this Actors tick cycle.
-					Mesh->TransformUpdated.AddUObject(this, &ALocalSimulationVolume::TransformUpdated);
-					KinematicBodies++;
-					NewMeshData->InHandle = LocalSimulation->CreateKinematicActor(kinematicBody, BodyTransform);
-				}
-				break;
-			case ELocalPhysicsBodyType::Static:
-				{
-					auto staticBody = BodyInstance.GetPxRigidBody_AssumesLocked();
-					if (!staticBody)
-						return false;
-					// add new mesh into simulation 'local' space
-					StaticBodies++;
-					NewMeshData->InHandle = LocalSimulation->CreateKinematicActor(staticBody, BodyTransform);
-				}
-				break;
-			case ELocalPhysicsBodyType::Dynamic:
-				{
-				auto dynamicBody = BodyInstance.GetPxRigidDynamic_AssumesLocked();
-				if (!dynamicBody)
-					return false;
-					DynamicBodies++;
-					// preserve linear / angular velocity for 'local' simulating mesh
-					FVector LinearVelocity = Mesh->GetPhysicsLinearVelocity();
-					FVector AngularVelocity = Mesh->GetPhysicsAngularVelocity();
-					// restore linear / angular velocity to 'local' handle of simulating mesh (newHandle), and convert it from 'world' to 'local' space base on this actor transform.
-					// by default, we create clones for kinematic components.
-
-					// add new mesh into simulation 'local' space
-					DynamicMesh->SetSimulatePhysics(false);
-
-					// create dynamic rigidbody, which is expected to simulate.
-					NewMeshData->InHandle = LocalSimulation->CreateDynamicActor(dynamicBody, BodyTransform);
-
-					if (bConvertVelocity)
-					{
-						NewMeshData->InHandle->SetLinearVelocity(LocalRotation.RotateVector(LocalSpace->ComponentToWorld.GetRotation().UnrotateVector(LinearVelocity)));
-						NewMeshData->InHandle->SetAngularVelocity(LocalRotation.RotateVector(LocalSpace->ComponentToWorld.GetRotation().UnrotateVector(AngularVelocity)));
-					}
-				}
-				break;
-			}
-
-		// remove original body from world-space
-		if(!ShouldExistInBothScenes)
-			BodyInstance.TermBody();
-
-		// create new pair in kinematic meshses array (we don't update on tick)
-		haveWeAddedMesh = (SimulatedActors.Add(NewMeshData) > -1);
-
-		//UE_LOG(LogTemp, Warning, TEXT("We added %s as %i"), *Mesh->GetOwner()->GetHumanReadableName(), (int)typeOfAdd);
-	}
-	return haveWeAddedMesh;
+	LocalPhysicData* NewMeshData = new LocalPhysicData(*LocalSimulation, Mesh, ShouldExistInBothScenes ? NewObject<UStaticMeshComponent>(this) : nullptr, nullptr, typeOfAdd);
+	MeshDataToAdd.Add(NewMeshData);
+	bDeferAdditionOfBodies = true;
+	return true;
 }
 
 bool ALocalSimulationVolume::AddConstraintToStaticMeshes(UStaticMeshComponent* MeshOne, UStaticMeshComponent* MeshTwo, int ConstraintProfileIndex)
 {
-
 	LocalPhysicData* MeshDataOne = GetDataForStaticMesh(MeshOne);
 	LocalPhysicData* MeshDataTwo = GetDataForStaticMesh(MeshTwo);
+
+	if (MeshDataOne == nullptr || MeshDataTwo == nullptr) {
+		return false;
+	}
 
 	FActorHandle* ActorOne = MeshDataOne->InHandle;
 	FActorHandle* ActorTwo = MeshDataTwo->InHandle;
@@ -506,6 +526,7 @@ bool ALocalSimulationVolume::AddConstraintToStaticMeshes(UStaticMeshComponent* M
 	}
 	return false;
 }
+
 
 // removal
 

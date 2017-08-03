@@ -374,6 +374,11 @@ void ALocalSimulationVolume::Update(FPhysScene* PhysScene, uint32 SceneType, flo
 	if (!LocalSimulation)
 		return;
 
+	// Update local rotation if we're getting it from the actor
+	if (bInheritActorRotation) {
+		LocalRotation = this->GetActorRotation();
+	}
+
 	DeferredAddition();
 	// don't simulate if we don't have an Actor Handle
 	if (!LocalSimulation->HandleAvailableToSimulate()) {

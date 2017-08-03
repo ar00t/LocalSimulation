@@ -157,6 +157,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Local Simulation")
 	FRotator LocalRotation = FRotator::ZeroRotator;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Local Simulation")
+	bool bInheritActorRotation = true;
+
 	// Show volumes which represnt objects in 'local' space
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Local Simulation")
 	bool bShowDebugPhyics = false;

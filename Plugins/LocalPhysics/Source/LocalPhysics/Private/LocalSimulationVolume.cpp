@@ -340,8 +340,8 @@ void ALocalSimulationVolume::UpdateMeshVisuals()
 		// dereference pointers to pointers, and set references
 		UStaticMeshComponent& Mesh = *MeshData->InVisualMesh;
 		LocalPhysics::FActorHandle& Handle = *MeshData->InHandle;
-
-		FTransform BodyTransform = (Handle.GetBodyTransform() * LocalSpace->ComponentToWorld);
+		//Not sure if this is right but it looks good for now
+		FTransform BodyTransform = FTransform::Identity.GetRelativeTransformReverse(Handle.GetWorldTransform() * LocalSpace->ComponentToWorld);
 
 		switch (MeshData->InBodyType)
 		{
@@ -356,7 +356,7 @@ void ALocalSimulationVolume::UpdateMeshVisuals()
 			Handle.SetWorldTransform(Mesh.ComponentToWorld.GetRelativeTransform(LocalSpace->ComponentToWorld));
 			break;
 		}
-
+		
 		// let's show everything in simulation.
 		if (bShowDebugPhyics)
 		{

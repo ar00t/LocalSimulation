@@ -160,6 +160,15 @@ void ALocalSimulationVolume::RemoveJoints()
 
 void ALocalSimulationVolume::RemoveMeshData()
 {
+	FPhysScene* PhysScene = GetWorld()->GetPhysicsScene();
+	if (!PhysScene)
+	{
+		return;
+	}
+	// Scene Lock for Multi-Threading
+	PxScene* SyncScene = PhysScene->GetPhysXScene(PST_Sync);
+	SCOPED_SCENE_WRITE_LOCK(SyncScene); //SCOPED_SCENE_WRITE_LOCK or SCOPED_SCENE_READ_LOCK if you only need to read
+
 	for (LocalPhysicData* MeshData : MeshDataToRemove)
 	{
 		// create pointers to mesh/handle for use later
@@ -172,7 +181,7 @@ void ALocalSimulationVolume::RemoveMeshData()
 		LocalPhysics::FActorHandle* Handle = temp->InHandle;
 
 		// create copy of new position in world
-		const FTransform BodyTransform = Handle->GetBodyTransform() * LocalSpace->ComponentToWorld;
+		const FTransform BodyTransform = Handle->GetWorldTransform() * LocalSpace->ComponentToWorld;
 
 		// store pointer to bodyinstance for later
 		FBodyInstance* BodyInstance = VisualMesh->GetBodyInstance();
@@ -342,6 +351,7 @@ void ALocalSimulationVolume::UpdateMeshVisuals()
 		LocalPhysics::FActorHandle& Handle = *MeshData->InHandle;
 		//Not sure if this is right but it looks good for now
 		FTransform BodyTransform = FTransform::Identity.GetRelativeTransformReverse(Handle.GetWorldTransform() * LocalSpace->ComponentToWorld);
+		FTransform BodyTransform = Handle.GetWorldTransform() * LocalSpace->GetRelativeTransform();
 
 		switch (MeshData->InBodyType)
 		{

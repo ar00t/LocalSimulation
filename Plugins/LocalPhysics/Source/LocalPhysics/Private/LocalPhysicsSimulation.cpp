@@ -113,17 +113,21 @@ void FLocalSimulation::RemoveActor(FActorHandle* Handle)
 		auto index = Handle->ActorDataIndex;
 
 		// if we have mroe than 1 actor, swap positions to keep maintian sorting todo: sorting lol
-		if(ActorHandles.Num() > 1)
+		if (ActorHandles.Num() > 1)
 		{
-			if (ActorHandles[ActorHandles.Num() - 1] != nullptr)
-			{
-				// this allows us to remove without unsorting
-				SwapActorData(ActorHandles.Num() - 1, index);
-
-				// store new index
-				index = ActorHandles.Num() - 1;
+			//Swap Actors from this index to the end of the array, this will push the removed item to the back
+			//while preserving sorting. TODO: Is this the best way to do this?
+			for (auto ActorDataIndex = index; ActorDataIndex < ActorHandles.Num() - 1; ++ActorDataIndex) {
+				if (ActorHandles[ActorDataIndex + 1] != nullptr)
+				{
+					SwapActorData(ActorDataIndex, ActorDataIndex + 1);
+					index = ActorDataIndex + 1;
+				}
+				else
+				{
+					break;
+				}
 			}
-			
 		}
 
 		// store temp before removal from array container
@@ -149,6 +153,7 @@ void FLocalSimulation::RemoveActor(FActorHandle* Handle)
 			case 2:
 				// remove from simulated bodies to maintain accurate count
 				--NumSimulatedBodies;
+				--NumActiveSimulatedBodies;
 				break;
 		}
 
